@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from core.cli import validateFile
+from core.loader import FileMetadata
 
 if __name__ == '__main__':
 
@@ -9,3 +10,6 @@ if __name__ == '__main__':
     parser.add_argument("filename", help="Process filename", type=validateFile)
 
     args = parser.parse_args()
+
+    fileInformation = FileMetadata(args.filename)
+    print(fileInformation)
