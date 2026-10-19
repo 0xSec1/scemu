@@ -9,6 +9,7 @@ if __name__ == '__main__':
     #CLI arguments parsing
     parser = argparse.ArgumentParser(description="Shellcode Emulator", suggest_on_error=True)
     parser.add_argument("filename", help="Process filename", type=validateFile)
+    parser.add_argument("--max-instruction", help="Shellcode max instruction execution", type=int, default=0)
 
     args = parser.parse_args()
 
@@ -27,5 +28,10 @@ if __name__ == '__main__':
         print(fileInformation.rawBytes)
         print("----- Read from mapped region -----")
         print(bytes(readBytes))
+
+        #maps stack and execute shellcode
+        emu.mapStack()
+        result = emu.runShellcode(maxInstruction=args.max_instruction)
+        print(f"Stopped: {result.reason} at EIP: {hex(result.eip)}, ESP:{hex(result.esp)}")
     else:
         print("ERROR: Read-back bytes does not match original file")
