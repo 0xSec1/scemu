@@ -31,7 +31,7 @@ if __name__ == '__main__':
 
         #maps stack and execute shellcode
         emu.mapStack()
-        result = emu.runShellcode(maxInstruction=args.max_instruction)
-        print(f"Stopped: {result.reason} at EIP: {hex(result.eip)}, ESP:{hex(result.esp)}")
+        result = emu.runShellcode(fileInformation.fileSize, maxInstruction=args.max_instruction)
+        print(f"Stopped: {result.reason} at instruction: {hex(result.executedAddress)} after {result.instructionCounter} instruction")
     else:
         print("ERROR: Read-back bytes does not match original file")

@@ -7,8 +7,10 @@ STACK_SIZE = 0x100000 #1MB stack size
 STACK_MID = STACK + (STACK_SIZE // 2)
 
 class EmulationResult:
-    def __init__(self, reason: str, eip: int, esp: int):
+    def __init__(self, reason: str, executedAddress: int, instructionCounter: int, eip: int, esp: int):
         self.reason = reason
+        self.executedAddress = executedAddress
+        self.instructionCounter = instructionCounter
         self.eip = eip
         self.esp = esp
 
@@ -40,14 +42,25 @@ class Emulator:
     def memRead(self, length: int) -> bytearray:
        return self.mu.mem_read(SHELLCODE_ADDRESS, length)
 
-    def runShellcode(self, maxInstruction: int = 0) -> EmulationResult:
+    #hook each instruction and stores executing instruction address and increment counter
+    def hook_callback(self, uc, address, size, user_data):
+        self.execAddress = address
+        self.instructionCounter += 1
+
+    def runShellcode(self, shellcodeLength: int, maxInstruction: int = 0) -> EmulationResult:
+        SHELLCODE_END_ADDRESS = SHELLCODE_ADDRESS + shellcodeLength
+        self.instructionCounter = 0
         try:
-            self.mu.emu_start(SHELLCODE_ADDRESS, 0, count=maxInstruction)
-            stopReason = "Instruction limit reached"
+            self.mu.hook_add(UC_HOOK_CODE, callback=self.hook_callback ,begin=SHELLCODE_ADDRESS, end=SHELLCODE_END_ADDRESS)
+            self.mu.emu_start(SHELLCODE_ADDRESS, SHELLCODE_END_ADDRESS, count=maxInstruction)
+            if maxInstruction:
+                stopReason = "Instruction limit reached"
+            else:
+                stopReason = "End of shellcode"
         except UcError as e:
             stopReason = f"{e}"
 
         eip = self.mu.reg_read(UC_X86_REG_EIP)
         esp = self.mu.reg_read(UC_X86_REG_ESP)
 
-        return EmulationResult(reason=stopReason, eip=eip, esp=esp)
+        return EmulationResult(reason=stopReason, executedAddress=self.execAddress, instructionCounter=self.instructionCounter, eip=eip, esp=esp)
