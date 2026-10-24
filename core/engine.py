@@ -1,5 +1,6 @@
 from unicorn import *
 from unicorn.x86_const import *
+from core.disassemble import *
 
 SHELLCODE_ADDRESS = 0x4000000
 STACK = 0x1000000
@@ -7,10 +8,12 @@ STACK_SIZE = 0x100000 #1MB stack size
 STACK_MID = STACK + (STACK_SIZE // 2)
 
 class EmulationResult:
-    def __init__(self, reason: str, executedAddress: int, instructionCounter: int, eip: int, esp: int):
+    def __init__(self, reason: str, executedAddress: int, instructionCounter: int, mnemonic: str | None, op_str: str | None, eip: int, esp: int):
         self.reason = reason
         self.executedAddress = executedAddress
         self.instructionCounter = instructionCounter
+        self.mnemonic = mnemonic
+        self.op_str = op_str
         self.eip = eip
         self.esp = esp
 
@@ -63,4 +66,8 @@ class Emulator:
         eip = self.mu.reg_read(UC_X86_REG_EIP)
         esp = self.mu.reg_read(UC_X86_REG_ESP)
 
-        return EmulationResult(reason=stopReason, executedAddress=self.execAddress, instructionCounter=self.instructionCounter, eip=eip, esp=esp)
+        byteLength = min(15, self.mappedSize - (self.execAddress - SHELLCODE_ADDRESS)) #prevent from crossing page boundary
+        executedBytes = self.mu.mem_read(self.execAddress, byteLength)
+        disasmInstruction = disasm.disassemble(bytes(executedBytes), self.execAddress)
+
+        return EmulationResult(reason=stopReason, executedAddress=self.execAddress, instructionCounter=self.instructionCounter, mnemonic=disasmInstruction[0], op_str=disasmInstruction[1] , eip=eip, esp=esp)
