@@ -8,12 +8,19 @@ STACK_SIZE = 0x100000 #1MB stack size
 STACK_MID = STACK + (STACK_SIZE // 2)
 
 class EmulationResult:
-    def __init__(self, reason: str, executedAddress: int, instructionCounter: int, mnemonic: str | None, op_str: str | None, eip: int, esp: int):
+    def __init__(self, reason: str,
+                 executedAddress: int, instructionCounter: int,
+                 mnemonic: str | None, op_str: str | None,
+                 accessType: int, failedAddress: int | None,
+                 byteSize: int, eip: int, esp: int):
         self.reason = reason
         self.executedAddress = executedAddress
         self.instructionCounter = instructionCounter
         self.mnemonic = mnemonic
         self.op_str = op_str
+        self.accessType = accessType
+        self.failedAddress = failedAddress
+        self.byteSize = byteSize
         self.eip = eip
         self.esp = esp
 
@@ -46,15 +53,37 @@ class Emulator:
        return self.mu.mem_read(SHELLCODE_ADDRESS, length)
 
     #hook each instruction and stores executing instruction address and increment counter
-    def hook_callback(self, uc, address, size, user_data):
+    def codeHook(self, uc, address, size, user_data):
         self.execAddress = address
         self.instructionCounter += 1
 
+    #hook on invalid memory access(Read, Write, Fetch)
+    def memInvalidHook(self, uc, access, address, size, value, user_data):
+        if access == UC_MEM_READ_UNMAPPED:
+            self.access = "read"
+        elif access == UC_MEM_WRITE_UNMAPPED:
+            self.access = "write"
+        elif access == UC_MEM_FETCH_UNMAPPED:
+            self.access = "fetch"
+        else:
+            self.access = "access"
+
+        self.failedAddress = address
+        self.size = size
+
+        return False
+
     def runShellcode(self, shellcodeLength: int, maxInstruction: int = 0) -> EmulationResult:
         SHELLCODE_END_ADDRESS = SHELLCODE_ADDRESS + shellcodeLength
+
         self.instructionCounter = 0
+        self.access = 0
+        self.failedAddress = None
+        self.size = 0
+
         try:
-            self.mu.hook_add(UC_HOOK_CODE, callback=self.hook_callback ,begin=SHELLCODE_ADDRESS, end=SHELLCODE_END_ADDRESS)
+            self.mu.hook_add(UC_HOOK_CODE, callback=self.codeHook ,begin=SHELLCODE_ADDRESS, end=SHELLCODE_END_ADDRESS)
+            self.mu.hook_add(UC_HOOK_MEM_READ_UNMAPPED | UC_HOOK_MEM_WRITE_UNMAPPED | UC_HOOK_MEM_FETCH_UNMAPPED, callback=self.memInvalidHook)
             self.mu.emu_start(SHELLCODE_ADDRESS, SHELLCODE_END_ADDRESS, count=maxInstruction)
             if maxInstruction:
                 stopReason = "Instruction limit reached"
@@ -70,4 +99,15 @@ class Emulator:
         executedBytes = self.mu.mem_read(self.execAddress, byteLength)
         disasmInstruction = disasm.disassemble(bytes(executedBytes), self.execAddress)
 
-        return EmulationResult(reason=stopReason, executedAddress=self.execAddress, instructionCounter=self.instructionCounter, mnemonic=disasmInstruction[0], op_str=disasmInstruction[1] , eip=eip, esp=esp)
+        return EmulationResult(
+                reason=stopReason,
+                executedAddress=self.execAddress,
+                instructionCounter=self.instructionCounter,
+                mnemonic=disasmInstruction[0],
+                op_str=disasmInstruction[1],
+                accessType=self.access,
+                failedAddress=self.failedAddress,
+                byteSize=self.size,
+                eip=eip,
+                esp=esp
+        )
