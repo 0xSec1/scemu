@@ -31,8 +31,9 @@ if __name__ == '__main__':
             print("----- Read from mapped region -----")
             print(bytes(readBytes))
 
-        #maps stack and execute shellcode
+        #maps stack, winenv and execute shellcode
         emu.mapStack()
+        emu.mapWindowsEnv()
         result = emu.runShellcode(fileInformation.fileSize, maxInstruction=args.max_instruction)
         output = f"Stopped: {result.reason} at instruction: {result.mnemonic} {result.op_str} at {hex(result.executedAddress)}"
         if result.failedAddress is not None:

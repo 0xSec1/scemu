@@ -1,9 +1,15 @@
 from unicorn import *
 from unicorn.x86_const import *
 from core.disassemble import *
+from winenv.segments import gdtSetup, buildTEB
 
 SHELLCODE_ADDRESS = 0x4000000
 STACK = 0x1000000
+TEB_ADDRESS = 0x2000000
+PEB_ADDRESS = 0x3000000
+GDT_ADDRESS = 0x8004000
+GDT_ENTRY_SIZE = 8
+PAGE_SIZE = 0x1000 #4kb page size
 STACK_SIZE = 0x100000 #1MB stack size
 STACK_MID = STACK + (STACK_SIZE // 2)
 
@@ -35,7 +41,7 @@ class Emulator:
         try:
             self.mu.mem_map(SHELLCODE_ADDRESS, self.mappedSize, UC_PROT_ALL)
         except UcError as e:
-            print(f"ERROR: {e}")
+            print(f"ERROR mapping shellcode memory: {e}")
 
     def mapStack(self):
         '''maps stack region and sets ESP and EBP at middle of stack'''
@@ -44,7 +50,45 @@ class Emulator:
             self.mu.reg_write(UC_X86_REG_ESP, STACK_MID)
             self.mu.reg_write(UC_X86_REG_EBP, STACK_MID)
         except UcError as e:
-            print(f"ERROR: {e}")
+            print(f"ERROR mapping stack: {e}")
+
+    def mapWindowsEnv(self):
+        '''maps PEB and TEB regions for windows environment'''
+        try:
+            self.mu.mem_map(TEB_ADDRESS, PAGE_SIZE, UC_PROT_READ | UC_PROT_WRITE)
+        except UcError as e:
+            print(f"ERROR mapping TEB:{e}")
+
+        try:
+            self.mu.mem_map(PEB_ADDRESS, PAGE_SIZE, UC_PROT_READ | UC_PROT_WRITE)
+        except UcError as e:
+            print(f"ERROR mapping PEB:{e}")
+
+        try:
+            self.mu.mem_map(GDT_ADDRESS, PAGE_SIZE, UC_PROT_READ | UC_PROT_WRITE)
+        except UcError as e:
+            print(f"ERROR mapping GDT:{e}")
+
+        try:
+            #build TEB
+            teb = buildTEB(TEB_ADDRESS, PEB_ADDRESS, STACK + STACK_SIZE, STACK)
+            self.mu.mem_write(TEB_ADDRESS, teb)
+
+            #build GDT and point GDTR register to it
+            gdt_entries, fs_selector, gs_selector, ds_selector, cs_selector, ss_selector = gdtSetup(fsBase=TEB_ADDRESS, fsLimit=0xfff)
+            for idx, value in enumerate(gdt_entries):
+                offset = idx * GDT_ENTRY_SIZE
+                self.mu.mem_write(GDT_ADDRESS + offset, value)
+
+            self.mu.reg_write(UC_X86_REG_GDTR, (0, GDT_ADDRESS, len(gdt_entries) * GDT_ENTRY_SIZE-1, 0))
+            self.mu.reg_write(UC_X86_REG_FS, fs_selector)
+            self.mu.reg_write(UC_X86_REG_GS, gs_selector)
+            self.mu.reg_write(UC_X86_REG_DS, ds_selector)
+            self.mu.reg_write(UC_X86_REG_CS, cs_selector)
+            self.mu.reg_write(UC_X86_REG_SS, ss_selector)
+
+        except Exception as e:
+            print(f"ERROR writing windows structure: {e}")
 
     def memWrite(self, shellcodeBytes: bytes):
         self.mu.mem_write(SHELLCODE_ADDRESS, shellcodeBytes)
@@ -98,6 +142,10 @@ class Emulator:
         byteLength = min(15, self.mappedSize - (self.execAddress - SHELLCODE_ADDRESS)) #prevent from crossing page boundary
         executedBytes = self.mu.mem_read(self.execAddress, byteLength)
         disasmInstruction = disasm.disassemble(bytes(executedBytes), self.execAddress)
+
+        #debug to check winenv access
+        # eax = self.mu.reg_read(UC_X86_REG_EAX)
+        # print(f"[DEBUG] EAX: {hex(eax)}")
 
         return EmulationResult(
                 reason=stopReason,
