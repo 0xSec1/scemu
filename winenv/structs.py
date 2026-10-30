@@ -1,0 +1,7 @@
+#_PEB member offsets
+LDR = 0xC    #structure of _PEB_LDR_DATA
+
+#_PEB_LDR_DATA member offsets
+LDR_IN_LOAD_ORDER_MODULE_LIST = 0xC     #structure of _LIST_ENTRY{Flink, Blink}
+LDR_IN_MEMORY_ORDER_MODULE_LIST = 0x14
+LDR_IN_INITIALIZATION_ORDER_MODULE_LIST = 0x1C

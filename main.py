@@ -19,9 +19,9 @@ if __name__ == '__main__':
 
     #emulator setup
     emu = Emulator()
-    emu.mapMemory(fileInformation.fileSize)
-    emu.memWrite(fileInformation.rawBytes)
-    readBytes = emu.memRead(fileInformation.fileSize)
+    emu.mapShellcodeMemory(fileInformation.fileSize)
+    emu.memWriteShellcode(fileInformation.rawBytes)
+    readBytes = emu.memReadShellcode(fileInformation.fileSize)
 
     if readBytes == fileInformation.rawBytes:
         print(f"Mapped {fileInformation.fileSize} bytes at {hex(SHELLCODE_ADDRESS)} ({emu.mappedSize} byte region)")

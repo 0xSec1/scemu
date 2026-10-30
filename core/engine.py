@@ -1,13 +1,16 @@
+import struct
 from unicorn import *
 from unicorn.x86_const import *
 from core.disassemble import *
 from winenv.segments import gdtSetup, buildTEB
+from winenv.structs import *
 
 SHELLCODE_ADDRESS = 0x4000000
 STACK = 0x1000000
 TEB_ADDRESS = 0x2000000
 PEB_ADDRESS = 0x3000000
 GDT_ADDRESS = 0x8004000
+PEB_LDR_DATA_ADDRESS = 0x9002000
 GDT_ENTRY_SIZE = 8
 PAGE_SIZE = 0x1000 #4kb page size
 STACK_SIZE = 0x100000 #1MB stack size
@@ -36,7 +39,7 @@ class Emulator:
         self.mu = Uc(UC_ARCH_X86, UC_MODE_32)
         self.mappedSize = 0
 
-    def mapMemory(self, size: int):
+    def mapShellcodeMemory(self, size: int):
         self.mappedSize = (size + 4095) & ~4095
         try:
             self.mu.mem_map(SHELLCODE_ADDRESS, self.mappedSize, UC_PROT_ALL)
@@ -52,22 +55,40 @@ class Emulator:
         except UcError as e:
             print(f"ERROR mapping stack: {e}")
 
+    def memWrite(self, memAddress: int, value: int):
+        try:
+            self.mu.mem_write(memAddress, struct.pack("<I", value))
+        except UcError as e:
+            print(f"ERROR writing at {memAddress}: {e}")
+
+    def memRead(self, memAddress: int):
+        try:
+            data = self.mu.mem_read(memAddress, 4)
+            return struct.unpack("<I", data)[0]
+        except UcError as e:
+            print(f"ERROR reading from {memAddress}: {e}")
+
     def mapWindowsEnv(self):
         '''maps PEB and TEB regions for windows environment'''
         try:
             self.mu.mem_map(TEB_ADDRESS, PAGE_SIZE, UC_PROT_READ | UC_PROT_WRITE)
         except UcError as e:
-            print(f"ERROR mapping TEB:{e}")
+            print(f"ERROR mapping TEB: {e}")
 
         try:
             self.mu.mem_map(PEB_ADDRESS, PAGE_SIZE, UC_PROT_READ | UC_PROT_WRITE)
         except UcError as e:
-            print(f"ERROR mapping PEB:{e}")
+            print(f"ERROR mapping PEB: {e}")
 
         try:
             self.mu.mem_map(GDT_ADDRESS, PAGE_SIZE, UC_PROT_READ | UC_PROT_WRITE)
         except UcError as e:
-            print(f"ERROR mapping GDT:{e}")
+            print(f"ERROR mapping GDT: {e}")
+
+        try:
+            self.mu.mem_map(PEB_LDR_DATA_ADDRESS, PAGE_SIZE, UC_PROT_READ | UC_PROT_WRITE)
+        except UcError as e:
+            print(f"ERROR mapping PEB_LDR_DATA: {e}")
 
         try:
             #build TEB
@@ -87,13 +108,28 @@ class Emulator:
             self.mu.reg_write(UC_X86_REG_CS, cs_selector)
             self.mu.reg_write(UC_X86_REG_SS, ss_selector)
 
+            #links PEB with required structures
+            self.memWrite(PEB_ADDRESS+LDR, PEB_LDR_DATA_ADDRESS)    #PEB->Ldr->PEB_LDR_DATA
+
+            #InLoadOrder
+            self.memWrite(PEB_LDR_DATA_ADDRESS+LDR_IN_LOAD_ORDER_MODULE_LIST, PEB_LDR_DATA_ADDRESS+LDR_IN_LOAD_ORDER_MODULE_LIST)   #Flink points to head since its empty for now
+            self.memWrite(PEB_LDR_DATA_ADDRESS+LDR_IN_LOAD_ORDER_MODULE_LIST+4, PEB_LDR_DATA_ADDRESS+LDR_IN_LOAD_ORDER_MODULE_LIST) #Blink points to head since its empty
+
+            #InMemoryOrder
+            self.memWrite(PEB_LDR_DATA_ADDRESS+LDR_IN_MEMORY_ORDER_MODULE_LIST, PEB_LDR_DATA_ADDRESS+LDR_IN_MEMORY_ORDER_MODULE_LIST)
+            self.memWrite(PEB_LDR_DATA_ADDRESS+LDR_IN_MEMORY_ORDER_MODULE_LIST+4, PEB_LDR_DATA_ADDRESS+LDR_IN_MEMORY_ORDER_MODULE_LIST)
+
+            #InInitializationOrder
+            self.memWrite(PEB_LDR_DATA_ADDRESS+LDR_IN_INITIALIZATION_ORDER_MODULE_LIST, PEB_LDR_DATA_ADDRESS+LDR_IN_INITIALIZATION_ORDER_MODULE_LIST)
+            self.memWrite(PEB_LDR_DATA_ADDRESS+LDR_IN_INITIALIZATION_ORDER_MODULE_LIST+4, PEB_LDR_DATA_ADDRESS+LDR_IN_INITIALIZATION_ORDER_MODULE_LIST)
+
         except Exception as e:
             print(f"ERROR writing windows structure: {e}")
 
-    def memWrite(self, shellcodeBytes: bytes):
+    def memWriteShellcode(self, shellcodeBytes: bytes):
         self.mu.mem_write(SHELLCODE_ADDRESS, shellcodeBytes)
 
-    def memRead(self, length: int) -> bytearray:
+    def memReadShellcode(self, length: int) -> bytearray:
        return self.mu.mem_read(SHELLCODE_ADDRESS, length)
 
     #hook each instruction and stores executing instruction address and increment counter
@@ -143,9 +179,7 @@ class Emulator:
         executedBytes = self.mu.mem_read(self.execAddress, byteLength)
         disasmInstruction = disasm.disassemble(bytes(executedBytes), self.execAddress)
 
-        #debug to check winenv access
-        # eax = self.mu.reg_read(UC_X86_REG_EAX)
-        # print(f"[DEBUG] EAX: {hex(eax)}")
+        # print(f"DEBUG-> EAX: {hex(self.mu.reg_read(UC_X86_REG_EAX))}")
 
         return EmulationResult(
                 reason=stopReason,
