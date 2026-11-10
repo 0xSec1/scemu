@@ -11,6 +11,8 @@ TEB_ADDRESS = 0x2000000
 PEB_ADDRESS = 0x3000000
 GDT_ADDRESS = 0x8004000
 PEB_LDR_DATA_ADDRESS = 0x9002000
+LDR_DATA_TABLE_ENTRY_ADDRESS = 0xB000000
+
 GDT_ENTRY_SIZE = 8
 PAGE_SIZE = 0x1000 #4kb page size
 STACK_SIZE = 0x100000 #1MB stack size
@@ -38,6 +40,7 @@ class Emulator:
         '''initializes unicorn engine in x86 32bit mode'''
         self.mu = Uc(UC_ARCH_X86, UC_MODE_32)
         self.mappedSize = 0
+        self.next_module_entry_address = LDR_DATA_TABLE_ENTRY_ADDRESS
 
     def mapShellcodeMemory(self, size: int):
         self.mappedSize = (size + 4095) & ~4095
@@ -55,9 +58,14 @@ class Emulator:
         except UcError as e:
             print(f"ERROR mapping stack: {e}")
 
-    def memWrite(self, memAddress: int, value: int):
+    def memWrite(self, memAddress: int, value: int | bytes):
         try:
-            self.mu.mem_write(memAddress, struct.pack("<I", value))
+            if isinstance(value, int):
+                self.mu.mem_write(memAddress, struct.pack("<I", value))
+            elif isinstance(value, bytes):
+                self.mu.mem_write(memAddress, value)
+            else:
+                raise TypeError(f"memWrite accepts int/bytes, got {type(value)}")
         except UcError as e:
             print(f"ERROR writing at {memAddress}: {e}")
 
@@ -67,6 +75,44 @@ class Emulator:
             return struct.unpack("<I", data)[0]
         except UcError as e:
             print(f"ERROR reading from {memAddress}: {e}")
+            raise
+
+    def populateModuleEntry(self, moduleName: str, baseAddress: int, moduleSize: int, entryPoint: int):
+        entryAddress = self.next_module_entry_address
+        try:
+            moduleNameBytes = moduleName.encode('utf-16le')
+            moduleNameWithNullBytes = (moduleName + '\x00').encode('utf-16le')
+            #raw text buffer at end of structure
+            bufferAddress = entryAddress + 0x34
+
+            self.memWrite(entryAddress + DLL_BASE, baseAddress)
+            self.memWrite(entryAddress + ENTRY_POINT, entryPoint)
+            self.memWrite(entryAddress + SIZE_OF_IMAGE, moduleSize)
+
+            unicodeString = struct.pack("<HHI", len(moduleNameBytes), len(moduleNameWithNullBytes), bufferAddress)
+
+            self.memWrite(entryAddress + FULL_DLL_NAME, unicodeString)
+            self.memWrite(entryAddress + BASE_DLL_NAME, unicodeString)
+            self.memWrite(bufferAddress, moduleNameWithNullBytes)
+
+            self.next_module_entry_address = entryAddress + (0x34 + len(moduleNameWithNullBytes))
+            return entryAddress
+
+        except Exception as e:
+            print(f"ERROR populating Module {moduleName} Entry: {e}")
+            raise e
+
+    def insertEntry(self, listHead: int, entryLinks: int):
+        '''
+        Inserts a LIST_ENTRY located at entryLinks at tail of
+        circular doubly linked list
+        '''
+        oldBlink = self.memRead(listHead + BLINK) #current last element head->Blink
+        self.memWrite(entryLinks + FLINK, listHead) #new->Flink = head
+        self.memWrite(entryLinks + BLINK, oldBlink) #new->Blink = old_last_element
+        self.memWrite(oldBlink + FLINK, entryLinks) #old_element->Flink = new
+        self.memWrite(listHead + BLINK, entryLinks) #head->Blink = new
+
 
     def mapWindowsEnv(self):
         '''maps PEB and TEB regions for windows environment'''
@@ -89,6 +135,11 @@ class Emulator:
             self.mu.mem_map(PEB_LDR_DATA_ADDRESS, PAGE_SIZE, UC_PROT_READ | UC_PROT_WRITE)
         except UcError as e:
             print(f"ERROR mapping PEB_LDR_DATA: {e}")
+
+        try:
+            self.mu.mem_map(LDR_DATA_TABLE_ENTRY_ADDRESS, PAGE_SIZE, UC_PROT_READ | UC_PROT_WRITE)
+        except UcError as e:
+            print(f"ERROR mapping LDR_DATA_TABLE_ENTRY: {e}")
 
         try:
             #build TEB
@@ -125,6 +176,19 @@ class Emulator:
 
         except Exception as e:
             print(f"ERROR writing windows structure: {e}")
+
+        try:
+            #build required dll entries
+            kernel32_entry = self.populateModuleEntry(
+                    moduleName="kernel32.dll",
+                    baseAddress=0x75000000,
+                    moduleSize=0x10000,
+                    entryPoint=0x75001000
+                    )
+            self.insertEntry(PEB_LDR_DATA_ADDRESS+LDR_IN_LOAD_ORDER_MODULE_LIST, kernel32_entry + IN_LOAD_ORDER_LINKS)
+            self.insertEntry(PEB_LDR_DATA_ADDRESS+LDR_IN_MEMORY_ORDER_MODULE_LIST, kernel32_entry + IN_MEMORY_ORDER_LINKS)
+        except Exception as e:
+            print(f"ERROR creating entry: {e}")
 
     def memWriteShellcode(self, shellcodeBytes: bytes):
         self.mu.mem_write(SHELLCODE_ADDRESS, shellcodeBytes)
