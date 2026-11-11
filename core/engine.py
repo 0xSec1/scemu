@@ -4,6 +4,7 @@ from unicorn.x86_const import *
 from core.disassemble import *
 from winenv.segments import gdtSetup, buildTEB
 from winenv.structs import *
+from winenv.pe import buildPEHeader
 
 SHELLCODE_ADDRESS = 0x4000000
 STACK = 0x1000000
@@ -113,6 +114,26 @@ class Emulator:
         self.memWrite(oldBlink + FLINK, entryLinks) #old_element->Flink = new
         self.memWrite(listHead + BLINK, entryLinks) #head->Blink = new
 
+    def addModule(self, moduleName: str, baseAddress: int, moduleSize: int, entryPoint: int):
+        try:
+            self.mu.mem_map(baseAddress, PAGE_SIZE, UC_PROT_READ | UC_PROT_WRITE)
+        except UcError as e:
+            print(f"ERROR mapping {moduleName} module address: {e}")
+
+        pe = buildPEHeader(baseAddress, moduleSize)
+        self.memWrite(baseAddress, pe)
+
+        entry = self.populateModuleEntry(moduleName, baseAddress, moduleSize, entryPoint)
+
+        self.insertEntry(
+                PEB_LDR_DATA_ADDRESS + LDR_IN_LOAD_ORDER_MODULE_LIST,
+                entry + IN_LOAD_ORDER_LINKS
+        )
+        self.insertEntry(
+                PEB_LDR_DATA_ADDRESS + LDR_IN_MEMORY_ORDER_MODULE_LIST,
+                entry + IN_MEMORY_ORDER_LINKS
+        )
+        return entry
 
     def mapWindowsEnv(self):
         '''maps PEB and TEB regions for windows environment'''
@@ -179,14 +200,12 @@ class Emulator:
 
         try:
             #build required dll entries
-            kernel32_entry = self.populateModuleEntry(
+            self.addModule(
                     moduleName="kernel32.dll",
                     baseAddress=0x75000000,
                     moduleSize=0x10000,
                     entryPoint=0x75001000
-                    )
-            self.insertEntry(PEB_LDR_DATA_ADDRESS+LDR_IN_LOAD_ORDER_MODULE_LIST, kernel32_entry + IN_LOAD_ORDER_LINKS)
-            self.insertEntry(PEB_LDR_DATA_ADDRESS+LDR_IN_MEMORY_ORDER_MODULE_LIST, kernel32_entry + IN_MEMORY_ORDER_LINKS)
+            )
         except Exception as e:
             print(f"ERROR creating entry: {e}")
 
